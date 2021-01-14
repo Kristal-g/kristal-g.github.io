@@ -32,14 +32,14 @@ The exploition steps will be:
 
 ## Anaylizing the vulnerability
 Finding the vulnerable function is not interesting in HEVD because the driver is filled with debug prints, so we'll skip it and go directly to that function.
-The decompiled function is pretty straight forward:
+The decompiled function is pretty straight forward:  
 ![](/assets/images/bof_gs/bufferOverflowGS_internal_decompilation.jpg)
 
-A good thing to note here is that IDA (7.5) ignores calls to Stack Cookie checks (1) and also exception handlers (2):
+A good thing to note here is that IDA (7.5) ignores calls to Stack Cookie checks (1) and also exception handlers (2):  
 ![](/assets/images/bof_gs/bufferOverflowGS_gs_exception_handler.jpg)
 
-Most of the exploitation tutorials on bypass GS protections use the exception handler as the [bypass](https://web.archive.org/web/20201206144133/https://www.corelan.be/index.php/2009/09/21/exploit-writing-tutorial-part-6-bypassing-stack-cookies-safeseh-hw-dep-and-aslr/) [method](http://ith4cker.com/content/uploadfile/201601/716b1451824309.pdf?tonalq=jvb2o3). It makes use of the fact that **if** the vulnerable function is wrapped with try/except then on 32 bit programs it will cause an exception handler address to be placed on the stack right besides the stack cookie. Then, overwriting that handler and causing an exception before the function gets to checking the cookie causes the exception handler to be called and in reality - our own pointer that we put there.
-But in 64 bit program [this is not how it works](https://www.osronline.com/article.cfm%5earticle=469.htm#:~:text=Because%20the%20x64,within%20the%20module) anymore. It was changed because the overhead of putting the exception handler on the stack everytime is costly and because it was susceptible to buffer overflow attacks.
+Most of the exploitation tutorials on bypass GS protections use the exception handler as the [bypass](https://web.archive.org/web/20201206144133/https://www.corelan.be/index.php/2009/09/21/exploit-writing-tutorial-part-6-bypassing-stack-cookies-safeseh-hw-dep-and-aslr/) [method](http://ith4cker.com/content/uploadfile/201601/716b1451824309.pdf?tonalq=jvb2o3). It makes use of the fact that **if** the vulnerable function is wrapped with try/except then on 32 bit programs it will cause an exception handler address to be placed on the stack right besides the stack cookie. Then, overwriting that handler and causing an exception before the function gets to checking the cookie causes the exception handler to be called and in reality - our own pointer that we put there.  
+But in 64 bit program [this is not how it works](https://www.osronline.com/article.cfm%5earticle=469.htm#:~:text=Because%20the%20x64,within%20the%20module) anymore. It was changed because the overhead of putting the exception handler on the stack everytime is costly and because it was susceptible to buffer overflow attacks.  
 Therefore we'll need to find another way to bypass that protection.
 
 ## GS Stack Protection bypass
