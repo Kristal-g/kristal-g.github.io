@@ -1,5 +1,5 @@
-title: Hacker theme
-description: Hacker is a theme for GitHub Pages.
-show_downloads: true
-google_analytics:
+title: Kristal's Notebook
+description: Writeups for cybershit
+show_downloads: false
+google_analytics: false
 theme: jekyll-theme-hacker
