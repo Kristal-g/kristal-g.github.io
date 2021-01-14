@@ -8,24 +8,64 @@ tags:
 ---
 
 ## Introduction
-This is my first blog post on HEVD exploit training (and first blog post overall). I'm writing this to return my debt to the tech community that posted HEVD write-ups that helped me learn so much. There are a lot of HEVD write-ups but unfortunately not for updated systems - usually the write-ups are for Windows 7 and 32 bit. This post is all about updated Windows 10 x64, one that I got directly from [Hyper-V Manager's "Quick Create" method](https://docs.microsoft.com/en-us/virtualization/hyper-v-on-windows/quick-start/quick-create-virtual-machine).
+This is my first blog post on HEVD exploit training (and first blog post overall). I'm writing this to return my debt to the tech community that posted HEVD write-ups that helped me learn so much. There are a lot of HEVD write-ups but unfortunately not for updated systems - usually the write-ups are for Windows 7 and 32 bit. 
+
+This post is all about updated Windows 10 x64, one that I got directly from [Hyper-V Manager's "Quick Create" method](https://docs.microsoft.com/en-us/virtualization/hyper-v-on-windows/quick-start/quick-create-virtual-machine) (Windows 10 dev environment).
+The post will assume knowledge of basic exploitation methods and x86/64 assembly.
+
+Exploiting Stack Overflow with GS (Stack protection) enabled on x64 programs is not straight-forward. Moreover, it seems like it's not possible on it's own. For that reason we will chain together an Arbitrary Read exploit to help us exploit it. The reason it's needed is explained in this post.
+Bypassing SMEP is also interesting as CR4 modification is protected using HyperGuard. We'll do it using PTE bit-flipping and see how to not cause double-fault BSOD when trying to execute our usermode shellcode.
+My method of training involves writing (almost) everything from scratch. Because in a later post we will need to adjust our shellcode, I will also include here my own method of writing the shellcode.
+
+Our setup will be:
+* Windows 10 version 2004 build 19041.746 as the Host machine
+* Windows 10 version 2004 build 19041.685 as the Guest machine running on Hyper-V
+* Windbg Preview as the kernel debugger
+
+The exploition steps will be:
+1. Analyze the vulnerability in IDA
+2. Trigger the vulnerability and find interesting offsets
+3. Bypass GS stack protection
+4. Write a token-stealing shellcode
+5. Bypass SMEP
 
 
+## Anaylizing the vulnerability
+Finding the vulnerable function is not interesting in HEVD because the driver is filled with debug prints, so we'll skip it and go directly to that function.
+The decompiled function is pretty straight forward:
+![](/assets/images/bof_gs/bufferOverflowGS_internal_decompilation.jpg)
+
+A good thing to note here is that IDA (7.5) ignores calls to Stack Cookie checks (1) and also exception handlers (2):
+![](/assets/images/bof_gs/bufferOverflowGS_gs_exception_handler.jpg)
+
+Most of the exploitation tutorials on bypass GS protections use the exception handler as the [bypass](https://web.archive.org/web/20201206144133/https://www.corelan.be/index.php/2009/09/21/exploit-writing-tutorial-part-6-bypassing-stack-cookies-safeseh-hw-dep-and-aslr/) [method](http://ith4cker.com/content/uploadfile/201601/716b1451824309.pdf?tonalq=jvb2o3). It makes use of the fact that **if** the vulnerable function is wrapped with try/except then on 32 bit programs it will cause an exception handler address to be placed on the stack right besides the stack cookie. Then, overwriting that handler and causing an exception before the function gets to checking the cookie causes the exception handler to be called and in reality - our own pointer that we put there.
+But in 64 bit program [this is not how it works](https://www.osronline.com/article.cfm%5earticle=469.htm#:~:text=Because%20the%20x64,within%20the%20module) anymore. It was changed because the overhead of putting the exception handler on the stack everytime is costly and because it was susceptible to buffer overflow attacks.
+Therefore we'll need to find another way to bypass that protection.
+
+## GS Stack Protection bypass
+
+## Writing the shellcode
+
+## Bypassing SMEP
+
+## Putting it all together
+
+## Thanks
+
+Notes:
+1. We could use dynamic pattern search on our loaded hevd.sys image to find the MiGetPteAddress instead of using a constant offset
+2. Locating the CTL_CODE in the stack is something we can do in the shellcode itself, and actually I'll demonstrate it in a later post
 
 ```cpp
 #include "main.h"
-
-/*
-
-*/
 
 
 BOOL ExploitStackOverflowGS()
 {
 
-    HANDLE hDevice = INVALID_HANDLE_VALUE;  // handle to the drive to be examined
-    BOOL bResult = FALSE;                 // results flag
-    DWORD junk = 0;                     // discard results
+    HANDLE hDevice = INVALID_HANDLE_VALUE;  
+    BOOL bResult = FALSE;                 
+    DWORD junk = 0;                     
     char inBuf[STACK_OVERFLOW_GS_EXPLOIT_BUFFER_LENGTH] = { 'A' };
 
     char buf[1000] = { 0 };
@@ -33,13 +73,13 @@ BOOL ExploitStackOverflowGS()
     LPVOID shellcode;
     HANDLE hFile = INVALID_HANDLE_VALUE;
 
-    hFile = CreateFile(L"sc.bin",               // file to open
-                              GENERIC_READ,          // open for reading
-                              FILE_SHARE_READ,       // share for reading
-                              NULL,                  // default security
+    hFile = CreateFile(L"sc.bin",       
+                              GENERIC_READ,  
+                              FILE_SHARE_READ, 
+                              NULL,             
                               OPEN_EXISTING,         // existing file only
                               FILE_ATTRIBUTE_NORMAL, // normal file
-                              NULL);                 // no attr. template
+                              NULL);                
 
     if (hFile == INVALID_HANDLE_VALUE) {
         printf("[-] Failed to open sc.bin file for reading\n");
