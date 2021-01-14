@@ -1,10 +1,7 @@
 ---
-layout: single
+layout: default
 title: HEVD Exploit - Stack OverflowGS on Windows 10 RS5 x64
 date: 2021-01-15
-classes: wide
-header:
-  teaser: /assets/images/avatar.jpg
 tags:
   - test1
   - test2
@@ -30,7 +27,7 @@ BOOL ExploitStackOverflowGS()
     BOOL bResult = FALSE;                 // results flag
     DWORD junk = 0;                     // discard results
     char inBuf[STACK_OVERFLOW_GS_EXPLOIT_BUFFER_LENGTH] = { 'A' };
-    
+
     char buf[1000] = { 0 };
     PDWORD fOld = NULL;
     LPVOID shellcode;
