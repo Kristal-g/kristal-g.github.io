@@ -13,17 +13,18 @@ This is my first blog post on HEVD exploit training (and the first blog post ove
 This post is all about updated Windows 10 x64, one that I got directly from [Hyper-V Manager's "Quick Create" method](https://docs.microsoft.com/en-us/virtualization/hyper-v-on-windows/quick-start/quick-create-virtual-machine) (Windows 10 dev environment).
 The post will assume knowledge of basic exploitation methods and x86/64 assembly.
 
-Exploiting Stack Overflow with GS (Stack protection) enabled on x64 programs is not straight-forward. Moreover, it seems like it's not possible on its own. For that reason, we will chain together an Arbitrary Read exploit to help us exploit it. The reason it's needed is explained in this post.
-Bypassing SMEP is also interesting as CR4 modification is protected using HyperGuard. We'll do it using PTE bit-flipping and see how to not cause double-fault BSOD when trying to execute our usermode shellcode.
-My method of training involves writing (almost) everything from scratch. Because in a later post we will need to adjust our shellcode, I will also include here my own method of writing the shellcode.
+Exploiting Stack Overflow with GS (Stack protection) enabled on x64 programs is not straight-forward. Moreover, it seems like it's not possible on its own. For that reason, we will chain together an Arbitrary Read exploit to help us in exploiting it. The reason it's needed is explained in this post.  
+
+Bypassing SMEP is also interesting as CR4 modification is protected using HyperGuard. We'll do it using PTE bit-flipping and see how to not cause a double-fault BSOD when trying to execute our usermode shellcode.  
+My method of training involves writing (almost) everything from scratch and because in a later post we will need to adjust our shellcode, I will also include here my own method of writing the shellcode.
 
 Our setup will be:
 * Windows 10 version 2004 build 19041.746 as the Host machine
 * Windows 10 version 2004 build 19041.685 as the Guest machine running on Hyper-V
-* Windbg Preview as the kernel debugger
+* Windbg Preview as the kernel debugger  
 Also important to note that we assume the integrity level of Medium. Otherwise, some primitives that we use here won't work.
 
-The exploitation steps will be:
+The exploitation steps are:
 1. Analyze the vulnerability in IDA
 2. Trigger the vulnerability and find interesting offsets
 3. Bypass GS stack protection
@@ -39,13 +40,15 @@ The decompiled function is pretty straight forward:
 A good thing to note here is that IDA (7.5) ignores calls to Stack Cookie checks (1) and also exception handlers (2):  
 ![](/assets/images/bof_gs/bufferOverflowGS_gs_exception_handler.jpg)
 
-Most of the exploitation tutorials on bypassing GS protections use the exception handler as the [bypass](https://web.archive.org/web/20201206144133/https://www.corelan.be/index.php/2009/09/21/exploit-writing-tutorial-part-6-bypassing-stack-cookies-safeseh-hw-dep-and-aslr/) [method](http://ith4cker.com/content/uploadfile/201601/716b1451824309.pdf?tonalq=jvb2o3). It makes use of the fact that **if** the vulnerable function is wrapped with try/except then on 32-bit programs it will cause an exception handler address to be placed on the stack right beside the stack cookie. Then, overwriting that handler and causing an exception before the function gets to checking the cookie causes the exception handler to be called and in reality - our own pointer that we put there.  
+Most of the exploitation tutorials on bypassing GS protections use the exception handler as the [bypass](https://web.archive.org/web/20201206144133/https://www.corelan.be/index.php/2009/09/21/exploit-writing-tutorial-part-6-bypassing-stack-cookies-safeseh-hw-dep-and-aslr/) [method](http://ith4cker.com/content/uploadfile/201601/716b1451824309.pdf?tonalq=jvb2o3). It makes use of the fact that **if** the vulnerable function is wrapped with try/except then on 32-bit programs it will cause an exception handler address to be placed on the stack right beside the stack cookie. Then, overwriting that handler and causing an exception before the function gets to checking the cookie causes the exception handler to be called and in an exploit - our own pointer that we've put there.  
 But in 64-bit program [this is not how it works](https://www.osronline.com/article.cfm%5earticle=469.htm#:~:text=Because%20the%20x64,within%20the%20module) anymore. It was changed because the overhead of putting the exception handler on the stack every time is costly and because it was susceptible to buffer overflow attacks.  
-Therefore we'll need to find another way to bypass that protection.
+Therefore we'll need to find another way to bypass that protection.  
+
 
 ## GS Stack Protection bypass
-When inspecting the stack we see we have nothing useful for us to overwrite past the buffer so we'll need to chain another vulnerability. This is pretty common practice, and to be fair the second vulnerability we will use is a basic one: Arbitrary Read.  
-In HEVD this vulnerability is found actually in the Write-What-Where code, but instead of writing a buffer of our own (what) to chosen address (where) - we will write a chosen address (what) to our buffer (where). This gets us our arbitrary read.  
+When inspecting the stack we see we have nothing useful for us to overwrite past the buffer so we'll need to chain another vulnerability. This is pretty common practice, and to be fair the second vulnerability we will use here is a basic one: Arbitrary Read.  
+
+In HEVD this vulnerability is found actually in the Write-What-Where code, but instead of writing a buffer of our own (what) to a chosen address (where) - we will write a chosen address (what) to our buffer (where). This effectively gets us our arbitrary read.  
 So, how do we use the arbitrary read to bypass GS stack protection? to answer that we'll recap shortly how it's implemented:
 1. The cookie is initialized by the _\_\_security_init_cookie_ function to a random value in the VCRuntime entry point. Interesting to note that it's saved at the first QWORD of the _\_data_ section:
 ![](/assets/images/bof_gs/gs_imp_2.jpg)
@@ -53,7 +56,7 @@ So, how do we use the arbitrary read to bypass GS stack protection? to answer th
 2. At the start of a function that has a "vulnerable" buffer, right after saving non-volatile registers and allocating space on the stack for local variables, the stack cookie is saved on the stack. It isn't saved as-is, but it's xored with the current RSP value:
 ![](/assets/images/bof_gs/gs_imp_1.jpg)
 
-3. At the end of the function, right before returning, the saved xored cookie is xored again against RSP and compared to the cookie in the _\_\_security_check_cookie_ function:
+3. At the end of the function, right before returning, the saved xored cookie is xored again against RSP and compared to the original cookie in the _\_\_security_check_cookie_ function:
 ![](/assets/images/bof_gs/gs_imp_3.jpg)
 
 4. If they're not identical, KeBugCheckEx is called with [0xF7 bugcheck code](https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0xf7--driver-overran-stack-buffer)
@@ -93,12 +96,12 @@ At first, this seems like a problem, because the stack is dynamic so how could w
 I'm not so sure about my chosen method, but the theory is sound and in practice it works everytime.
 The plan is this:
 1. Calculate/leak/find somehow a stack address in the kernel
-2. Find constant or predictable values in the stack the will use as an anchor
-3. Scan these predictable values using our read primitive
+2. Find constants or predictable values in the stack the we'll use as anchors
+3. Scan for these predictable values using our read primitive
 4. Calculate what RSP will be when the Buffer Overflow is called, using the addresses found in step 3
 
 For every thread in usermode process the OS allocates usermode stack and kernelmode stack.
-Our plan relies on the fact that the driver behavior is pretty simple and consistant, and that the vulnerable functions are called in the context of our thread.  
+Our plan relies on the fact that the driver behavior is pretty simple and consistent, and that the vulnerable functions are called in the context of our thread.  
 So to achieve step 1 we'll take a method from Sam Brown's (sam-b) [awesome repository](https://github.com/sam-b/windows_kernel_address_leaks) for kernel address leaks.
 [It uses](https://github.com/sam-b/windows_kernel_address_leaks/blob/3810bec445c0afaa4e23338241ba0359aea398d1/NtQuerySysInfo_SystemProcessInformation/NtQuerySysInfo_SystemProcessInformation/NtQuerySysInfo_SystemProcessInformation.cpp#L158) NtQuerySystemInformation and it gives us the address of the end of our kernel thread (the "StackLimit" struct member):
 ```cpp
@@ -123,7 +126,7 @@ while (pProcessInfo != NULL) {
 }
 ```
 
-For step 2, I've put a breakpoint at the start of our vulnerable function and looked at the data on the stack. I've found that in our case, the value of the current IOCTL is in a consistant place on the stack relative to RSP. Therefore it can be used as an anchor for our calculations.
+For step 2, I've put a breakpoint at the start of our vulnerable function and looked at the data on the stack. I've found that in our case, the value of the current IOCTL is in a consistent place on the stack relative to RSP. Therefore it can be used as an anchor for our calculations.
 
 Step 3 is pretty simple and looks like this:
 ```cpp
@@ -136,7 +139,6 @@ while (stackSearch < (intptr_t)stackLimit - 0x10) {
     wwwBuf.where = &whereBuffer;
 
     bResult = DeviceIoControl(hDevice, HEVD_IOCTL_ARBITRARY_WRITE, &wwwBuf, sizeof(wwwBuf), NULL, 0, &junk, (LPOVERLAPPED)NULL);
-
     if (whereBuffer == HEVD_IOCTL_ARBITRARY_WRITE) {
         printf("[*] Found CTL_CODE in the stack at: 0x%llx\n", stackSearch);
         foundControlCode = TRUE;
@@ -150,6 +152,9 @@ if (!foundControlCode) {
 }
 ```
 
+Step 4 can be done through static code reversing or in a dynamic way.  
+For me, the dynamic way was easier and invloved putting breakpoints at the arbitrary read function and at the buffer overflow function and see the difference in the RSP values.  
+The results were that the RSP that gets xored with the cookie is predicted to be ```CTL_CODE_ADDRESS - 0x2a8```.  
 
 
 
@@ -163,7 +168,7 @@ if (!foundControlCode) {
 
 Notes:
 1. We could use a dynamic pattern search on our loaded hevd.sys image to find the MiGetPteAddress instead of using a constant offset
-2. Locating the CTL_CODE in the stack is something we can do in the shellcode itself, and actually I'll demonstrate it in a later post
+
 
 ```cpp
 #include "main.h"
