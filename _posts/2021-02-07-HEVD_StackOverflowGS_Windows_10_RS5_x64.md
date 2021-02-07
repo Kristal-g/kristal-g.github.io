@@ -1,14 +1,16 @@
 ---
 layout: default
 title: HEVD Exploit - Stack OverflowGS on Windows 10 RS5 x64
-date: 2021-01-15
+date: 2021-02-07
 tags:
-  - test1
-  - test2
+  - HEVD
+  - Windows 10
+  - Exploitation
+  - Stack Overflow GS
 ---
 
 ## Introduction
-Hey all! This is my first blog post on HEVD exploit training (and the first personal blog post overall). I'm writing this to return my debt to the tech community that posted HEVD [write](https://h0mbre.github.io/HEVD_Stackoverflow_SMEP_Bypass_64bit/#)-[ups](https://connormcgarr.github.io/x64-Kernel-Shellcode-Revisited-and-SMEP-Bypass/) that helped me learn so much about practical exploitation. There are a lot of HEVD write-ups but unfortunately, not for updated systems - usually the write-ups are for Windows 7 and 32-bit. 
+Hey all! This is my first blog post on [HEVD](https://github.com/hacksysteam/HackSysExtremeVulnerableDriver) exploit training (and the first personal blog post overall). I'm writing this to return my debt to the tech community that posted HEVD [write](https://h0mbre.github.io/HEVD_Stackoverflow_SMEP_Bypass_64bit/#)-[ups](https://connormcgarr.github.io/x64-Kernel-Shellcode-Revisited-and-SMEP-Bypass/) that helped me learn so much about practical exploitation. There are a lot of HEVD write-ups but unfortunately, not for updated systems - usually the write-ups are for Windows 7 and 32-bit. 
 
 This post is all about updated Windows 10 x64, one that I got directly from [Hyper-V Manager's "Quick Create" method](https://docs.microsoft.com/en-us/virtualization/hyper-v-on-windows/quick-start/quick-create-virtual-machine) (Windows 10 dev environment).
 The post will assume knowledge of basic exploitation methods and x86/64 assembly.
@@ -306,7 +308,7 @@ Ideally, we would put the wbinvd gadget in our chain and run the exploit once, b
   
   
 That's it! I hope it helped someone to learn some practical methods :)
-The full patchy code is on this site's [repository](/code) for now.
+The full patchy code is on this site's [repository](https://github.com/Kristal-g/kristal-g.github.io/tree/master/assets/code) for now.
 
 ## What's next
 The next post is about the type-confusion vulnerability - how to exploit it using stack pivoting, overcoming double faults and writing stack-restoring shellcode.
