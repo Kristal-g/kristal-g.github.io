@@ -49,9 +49,9 @@ Therefore we'll need to find another way to bypass that protection.
   
 
 ## GS Stack Protection bypass
-When inspecting the stack we see we have nothing useful for us to overwrite past the buffer so we'll need to chain another vulnerability. This is pretty common practice, and to be fair the second vulnerability we will use here is a basic one: Arbitrary Read.  
+When inspecting the stack we see we have nothing useful for us to overwrite past the buffer so we'll need to chain another primitive. This is pretty common practice, and to be fair the second primitive we will use here is a basic one: Arbitrary Read.  
 
-In HEVD this vulnerability is found actually in the Write-What-Where code, but instead of writing a buffer of our own (what) to a chosen address (where) - we will write a chosen address (what) to our buffer (where). This effectively gets us our arbitrary read.  
+In HEVD this primitive is found actually in the Write-What-Where code, but instead of writing a buffer of our own (what) to a chosen address (where) - we will write a chosen address (what) to our buffer (where). This effectively gets us our arbitrary read.  
 So, how do we use the arbitrary read to bypass GS stack protection? to answer that we'll recap shortly how it's implemented:
 1. The cookie is initialized by the _\_\_security_init_cookie_ function to a random value in the VCRuntime entry point. Note here that it's saved at the first QWORD of the _\_data_ section:
 ![](/assets/images/bof_gs/gs_imp_2.jpg)
