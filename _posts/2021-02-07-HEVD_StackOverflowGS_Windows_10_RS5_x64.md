@@ -32,6 +32,7 @@ The exploitation steps are:
 3. Bypass SMEP
 4. Putting it all together
   
+<br/>
 
 ## Analyzing the vulnerability
 Finding the vulnerable function is not interesting in HEVD because the driver is filled with debug prints that spoil it, so we'll skip it and go directly to that function.
@@ -44,6 +45,7 @@ A good thing to note here is that IDA (7.5) ignores calls to Stack Cookie checks
 Most of the exploitation tutorials on bypassing GS protections use the exception handler as the [bypass](https://web.archive.org/web/20201206144133/https://www.corelan.be/index.php/2009/09/21/exploit-writing-tutorial-part-6-bypassing-stack-cookies-safeseh-hw-dep-and-aslr/) [method](http://ith4cker.com/content/uploadfile/201601/716b1451824309.pdf?tonalq=jvb2o3). It makes use of the fact that **if** the vulnerable function is wrapped with try/except then on 32-bit programs it will cause an exception handler address to be placed on the stack right beside the stack cookie. Then, overwriting that handler and causing an exception before the function gets to checking the cookie causes the exception handler to be called and in an exploit - our own pointer that we've put there.  
 But in 64-bit program [this is not how it works](https://www.osronline.com/article.cfm%5earticle=469.htm#:~:text=Because%20the%20x64,within%20the%20module) anymore. It was changed because the overhead of putting the exception handler on the stack every time is costly and because it was susceptible to buffer overflow attacks.  
 Therefore we'll need to find another way to bypass that protection.  
+<br />
   
 
 ## GS Stack Protection bypass
@@ -177,7 +179,9 @@ Evaluate expression:
   Decimal: 680
 ```
 The results show that the RSP that gets xored with the cookie is predicted to be ```CTL_CODE_ADDRESS - 0x2a8```.  
-Now we have all that we need to bypass the GS stack protection and move on to getting our shellcode executed.
+Now we have all that we need to bypass the GS stack protection and move on to getting our shellcode executed.  
+<br />
+        
 
 ## Bypassing SMEP
 The best result for me was getting arbitrary shellcode executed. If we reach that step, we can do everything we want in that shellcode from the kernel's context.  
@@ -244,6 +248,7 @@ ULONGLONG wantedPteValue = readBuffer & ~0x4;
 ```
 
 Now we know what data we want to write (wantedPteValue) and where to write it to (shellcodePte). The actual writing will happen in the rop chain because we don't have an arbitrary write primitive.  
+<br/>
 
 ## Putting it all together
 The rop chain should do this:
@@ -307,12 +312,13 @@ Ideally, we would put the wbinvd gadget in our chain and run the exploit once, b
 ![](/assets/images/bof_gs/yay_run.jpg)
   
   
-That's it! I hope it helped someone to learn some practical methods :)
-The full patchy code is on this site's [repository](https://github.com/Kristal-g/kristal-g.github.io/tree/master/assets/code) for now.
-
+That's it! I hope it helped someone to learn some practical methods :)  
+The full crappy code is on this site's [repository](https://github.com/Kristal-g/kristal-g.github.io/tree/master/assets/code) for now.
+<br/>  
+  
 ## What's next
 The next post is about the type-confusion vulnerability - how to exploit it using stack pivoting, overcoming double faults and writing stack-restoring shellcode.
-  
+<br/>  
 
 ## Contact me
 Feel free to reach out at my [twitter](https://twitter.com/gal_kristal) or [email](mailto:gkristal.w@gmail.com)!
