@@ -14,7 +14,7 @@ tags:
 ## Introduction
 Hey all! This is just me trying again to return my debt to the tech community and document some practical methods of exploitation on an updated Windows 10.  
   
-This post is about Type Confusion vulnerabilty (arbitrary pointer call in this case) in [HEVD](https://github.com/hacksysteam/HackSysExtremeVulnerableDriver). Topics that will be covered here are Stack Pivoting, shellcode writing and some kernel shenanigans.  
+This post is about Type Confusion vulnerability (arbitrary pointer call in this case) in [HEVD](https://github.com/hacksysteam/HackSysExtremeVulnerableDriver). Topics that will be covered here are Stack Pivoting, shellcode writing and some kernel shenanigans.  
 I highly recommend reading my previous [post]({% post_url 2021-02-07-HEVD_StackOverflowGS_Windows_10_RS5_x64 %}) as some of the concepts here are explained in detail there, and I won't explain them again here. This is not a standalone post.
 
 Our setup will be:
@@ -25,7 +25,7 @@ Our setup will be:
 *Also important to note that we assume the integrity level of Medium. Otherwise, some primitives that we use here won't work.
 
 The exploitation steps are:
-1. Analyze the vulnerability in IDA
+1. Analyze the vulnerability
 2. Prepare stack pivot rop chain
 3. Write stack-fixing shellcode
 4. Putting it all together
@@ -45,13 +45,13 @@ bResult = DeviceIoControl(hDevice, HEVD_IOCTL_TYPE_CONFUSION, &tcBuf, sizeof(tcB
 First, we want to know what can we control in this situation. After putting a breakpoint in the vulnerable line and triggering the function we can see that none of the registers contain or point to a value that we control. Also the stack doesn't contain any controllable data (that's not surprising on x64 code as it doesn't use the stack for passing arguments). 
 So how do we exploit this?  
   
-In earlier windows versions it's as simple as it gets - just point it to your shellcode. But now we have SMEP enabled so that won't work anymore.  
+In earlier Windows versions it's as simple as it gets - just point it to your shellcode. But now we have SMEP enabled so that won't work anymore.  
 We have no direct control over the stack and register values and we assume we don't have any other primitive (read/write for example).  
 Luckily for us, the call isn't protected by [Control Flow Guard](https://docs.microsoft.com/en-us/windows/win32/secbp/control-flow-guard) so we can call an arbitrary address **in kernel mode**.  
 The way I went for exploiting this is by stack pivoting. This is the only way I found that gives us some wiggle room.  
-As before, the ultimate goal is to eventually run arbitrary shellcode.  
+As before, the ultimate goal is to eventually run an arbitrary shellcode.  
   
-In general lines, what we need to do is this:
+In general, what we need to do is this:
 1. Find a valid stack pivot gadget
 2. Prepare the fake stack to bypass SMEP and call our shellcode
 3. Steal SYSTEM's token
@@ -63,7 +63,7 @@ In general lines, what we need to do is this:
 ## Prepare stack pivot rop chain
 First, we have to find a stack pivot gadget.
 I like to use [ropper](https://github.com/sashs/Ropper) for finding rop gadgets. We'll extract all the gadgets from ntoskrnl.exe and win32kbase.sys and search there for a gadget that manipulates the stack pointer. Ideally, we want gadgets like this:
-```x86asm
+```nasm
 mov esp, some_value; ret
 xchg rsp, some_reg; ret
 ```
@@ -71,18 +71,21 @@ Gadgets such as ```add esp, some_value``` are not suitable for us as they provid
 There's one important constraint on the gadgets we look for - the new stack pointer should point to a [**usermode, 16-byte aligned address**](https://docs.microsoft.com/en-us/cpp/build/stack-usage?view=msvc-160#:~:text=The%20stack%20will%20always%20be%20maintained%2016-byte%20aligned). The only relevant gadgets I found is `mov esp, 0x8bff9590; ret;`.  
 Unfortunately this opens up a new problem for us - we lose the original ```rsp``` value in the process, so it makes fixing the stack a bit harder. But one problem at a time...  
   
-Now, after making sure the stack pivot address is actually available for us by allocating it with VirtualAlloc we can continue to build the fake stack.  
+Now, after making sure the stack pivot address is actually available for us by allocating it with VirtualAlloc we can continue with building the fake stack.  
 ```cpp
 reserveSpace = VirtualAlloc(STACK_PIVOT_ADDR, 0xA000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 ```
-As explained in my last post, we'll bypass SMEP by flipping the Owner bit in our shellcode's PTE. But now, as opposed to that post, we don't have an arbitrary read primitive to read the `PTE_BASE` value from `MiGetPteAddress`.  
+We'll start by bypassin SMEP. That's needed because we want to freely run an arbitrary shellcode, and the easiest way is to put that shellcode in usermode.  
+For the bypass, as explained in my last post, we'll flip the Owner bit in our shellcode's PTE. That will make the shellcode to look like it's a kernel address and SMEP won't be enforced on it.  
+But now, as opposed to that post, we don't have a way to calculate the shellcode's PTE address because we don't have an arbitrary read primitive to read the `PTE_BASE` value from `MiGetPteAddress` function.  
+What we'll do is to use the rop chain itself: `ret` into `MiGetPteAddress` with our shellcode's address as an argument and the return value (rax) will be the shellcode's PTE address. No more calculations are needed after that.
   
-After bypassing smep we want to flush the TLB Cache so calling our shellcode won't bugcheck with ATTEMPTED_EXECUTE_OF_NOEXECUTE_MEMORY.  
+After bypassing SMEP we want to flush the TLB Cache so calling our shellcode won't bugcheck with ATTEMPTED_EXECUTE_OF_NOEXECUTE_MEMORY.  
 As [explained before](https://kristal-g.github.io/2021/02/07/HEVD_StackOverflowGS_Windows_10_RS5_x64.html#:~:text=The%20TLB%20is%20a%20small%20buffer%20in%20the%20CPU), we'll use the wbinvd instruction before finally calling our shellcode.  
   
 We know what we want to achieve so now it's time to assemble the rop chain. It was actually harder than I expected it to be, and it took 4-5 hours at least.  
 It came out a bit convoluted because of the gadgets I found, so let's just dive in into what it does and why:
-```x86asm
+```nasm
 pop rcx                 ; rcx = shellcode address
 call MiGetPteAddress    
 mov r8, rax             ; rax = r8 = Shellcode's PTE address
@@ -104,7 +107,7 @@ One of the problems that took me some time to figure out was that it always cras
 After investigating it for hours I returned to [msdn documentation](https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x7f--unexpected-kernel-mode-trap#:~:text=There%20are%20two%20common%20causes%20of%20a%20Double%20Fault) and realized the explanation was there all this time:
 > There are two common causes of a Double Fault: 1. A kernel stack overflow. This overflow occurs when a guard page is hit, and the kernel tries to push a trap frame. Because there is no stack left, a stack overflow results, causing the double fault.  
 
-The stack pivot address is `0x48000028` and it lies almost on the border of a page, and I didn't allocate the previous page. Therefore when trying to run the shellcode, the kernel had a page fault and tried to allocate a [_KTRAP_FRAME](https://www.vergiliusproject.com/kernels/x64/Windows%2010%20%7C%202016/2009%2020H2%20(October%202020%20Update)/_KTRAP_FRAME) on the stack which is 0x190 bytes in size and makes it cross memory page boundries in the process. Allocating the previous page fixed the Double Fault problem. If your pivot gadget is with a similar condition I hope this will help a bit.  
+The stack pivot address is `0x48000028` and it lies almost on the border of a page, and I didn't allocate the previous page. Therefore when trying to run the shellcode, the kernel had a page fault and tried to allocate a [_KTRAP_FRAME](https://www.vergiliusproject.com/kernels/x64/Windows%2010%20%7C%202016/2009%2020H2%20(October%202020%20Update)/_KTRAP_FRAME) on the stack which is 0x190 bytes in size and makes it cross memory page boundaries in the process. Allocating the previous page fixed the Double Fault problem. If your pivot gadget is with a similar condition I hope this will help a bit.  
 Other than that, for some reason, the results weren't consistent at all. Taking a different stack pivot gadget fixed it.  
 
 The full stack prep looks like:
@@ -155,7 +158,7 @@ The shellcode copied the SYSTEM token to our process' token and all is good. But
 That requires us to restore the stack pointer that went into oblivion the moment we ran our stack pivot gadget (`mov esp, 0x8bff9590`).  
 So what can we do?  
 
-Similarly to my last blog post, we can utilize a [stack-searching method](https://kristal-g.github.io/2021/02/07/HEVD_StackOverflowGS_Windows_10_RS5_x64.html#:~:text=The%20plan%20is%20this) to calculate what `rsp` was when we first triggered the vulnerability.  
+Similar to my last blog post, we can utilize a [stack-searching method](https://kristal-g.github.io/2021/02/07/HEVD_StackOverflowGS_Windows_10_RS5_x64.html#:~:text=The%20plan%20is%20this) to calculate what `rsp` was when we first triggered the vulnerability.  
 In contrast to the method I outlined in that post, we don't have an arbitrary read primitive now. That's OK; it just means we'll do it all in the shellcode.  
 Thus, the full plan is:
 1. Before triggering the vulnerability, we query our kernelmode stack starting address
@@ -170,7 +173,7 @@ Stage 2 - put it in our fake stack and pop it out in the shellcode:
 ```
 
 Stage 3 & 4 looks like that:
-```x86asm
+```nasm
 	pop rax ; Get stack limit from fake stack
 	
     ; Start searching for the Control Code
@@ -206,4 +209,4 @@ The full crappy code is on this site's [repository](https://github.com/Kristal-g
 <br/>  
   
 ## Contact me
-Feel free to reach out at my [twitter](https://twitter.com/gal_kristal) or [email](mailto:gkristal.w@gmail.com)!
+Feel free to reach out at my [Twitter](https://twitter.com/gal_kristal) or [email](mailto:gkristal.w@gmail.com)!
