@@ -15,7 +15,7 @@ tags:
 Hey all! This is just me trying again to return my debt to the tech community and document some practical methods of exploitation on an updated Windows 10.  
   
 This post is about Type Confusion vulnerability (arbitrary pointer call in this case) in [HEVD](https://github.com/hacksysteam/HackSysExtremeVulnerableDriver). Topics that will be covered here are Stack Pivoting, shellcode writing and some kernel shenanigans.  
-I highly recommend reading my previous [post]({% post_url 2021-02-07-HEVD_StackOverflowGS_Windows_10_RS5_x64 %}) as some of the concepts here are explained in detail there, and I won't explain them again here. This is not a standalone post.
+I highly recommend reading my [previous post]({% post_url 2021-02-07-HEVD_StackOverflowGS_Windows_10_RS5_x64 %}) as some of the concepts here are explained in detail there, and I won't explain them again here. This is not a standalone post.
 
 Our setup will be:
 * Windows 10 version 2004 build 19041.746 as the Host machine
@@ -27,7 +27,7 @@ Our setup will be:
 The exploitation steps are:
 1. Analyze the vulnerability
 2. Prepare stack pivot rop chain
-3. Write stack-fixing shellcode
+3. Write stack-restoring shellcode
 4. Putting it all together
   
 <br/>
@@ -83,7 +83,7 @@ What we'll do is to use the rop chain itself: `ret` into `MiGetPteAddress` with 
 After bypassing SMEP we want to flush the TLB Cache so calling our shellcode won't bugcheck with ATTEMPTED_EXECUTE_OF_NOEXECUTE_MEMORY.  
 As [explained before](https://kristal-g.github.io/2021/02/07/HEVD_StackOverflowGS_Windows_10_RS5_x64.html#:~:text=The%20TLB%20is%20a%20small%20buffer%20in%20the%20CPU), we'll use the wbinvd instruction before finally calling our shellcode.  
   
-We know what we want to achieve so now it's time to assemble the rop chain. It was actually harder than I expected it to be, and it took 4-5 hours at least.  
+We know what we want to achieve so now it's time to assemble the rop chain. The obvious restriction was using only [volatile registers](https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160). It was actually harder than I expected it to be, and it took 4-5 hours at least.  
 It came out a bit convoluted because of the gadgets I found, so let's just dive in into what it does and why:
 ```nasm
 pop rcx                 ; rcx = shellcode address
@@ -91,9 +91,10 @@ call MiGetPteAddress
 mov r8, rax             ; rax = r8 = Shellcode's PTE address
 mov rdx, r8             ; rdx = Shellcode's PTE address
 mov rax, [rax]          ; rax = Shellcode's PTE value
-mov rcx, r8             ; r8 = Shellcode's PTE address
+mov r8, rax             ; r8 = Shellcode's PTE value
+mov rcx, r8             ; rcx = Shellcode's PTE value
 mov rax, 4              
-sub rcx, rax            ; The Owner flag is the 3rd bit. It was 1 (Owner=Usermode) so by subtracting 4 from it we clear that bit
+sub rcx, rax            ; The Owner flag is the 3rd bit. It was 1 (Owner=Usermode) so by subtracting 4 from it we clear that bit and make it Owner=Kernel
 mov rax, rcx            ; rax = modified PTE value
 mov [rdx], rax          ; save the modified PTE value back into the PTE address
 wbinvd                  ; Clear the TLB Cache
@@ -102,7 +103,7 @@ call shellcode
   
 At first I tried to only use gadgets from `ntoskrnl.exe` to reduce dependencies but it just didn't have all that I needed, so I added gadgets from `win32kbase.sys`. If you have a suggestion for a simpler rop chain, only from ntoskrnl, let me know!  
 
-Also, when I first tried it I took a different pivot gadget: `0x000000014035a4e0: mov esp, 0x48000000; add esp, 0x28; ret;`.  
+Also, when I first tried it I took a different pivot gadget: `mov esp, 0x48000000; add esp, 0x28; ret;`.  
 One of the problems that took me some time to figure out was that it always crashed with bugcheck UNEXPECTED_KERNEL_MODE_TRAP and trap mode equals 8 (Double Fault).  
 After investigating it for hours I returned to [msdn documentation](https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x7f--unexpected-kernel-mode-trap#:~:text=There%20are%20two%20common%20causes%20of%20a%20Double%20Fault) and realized the explanation was there all this time:
 > There are two common causes of a Double Fault: 1. A kernel stack overflow. This overflow occurs when a guard page is hit, and the kernel tries to push a trap frame. Because there is no stack left, a stack overflow results, causing the double fault.  
@@ -204,6 +205,8 @@ How to find the correct offset from the IOCTL is [explained here](https://krista
 Combining everything here creates a pretty stable exploit:
 ![](/assets/images/type_conf/type_confusion_yay_run.jpg)
   
+Actually it's generic enough, that I only needed to adjust the stack-restoring shellcode to be able to use this successfuly with a zero-day that [my awesome teammate](https://twitter.com/kasifdekel) recently found.  
+
 That's it! I hope it helped someone to learn some practical methods :)  
 The full crappy code is on this site's [repository](https://github.com/Kristal-g/kristal-g.github.io/tree/master/assets/code) for now.  
 <br/>  
