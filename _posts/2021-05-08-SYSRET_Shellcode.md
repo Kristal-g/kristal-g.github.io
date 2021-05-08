@@ -152,7 +152,9 @@ mov [rax + 0x1e4], cx
 ```
 
 **And that's it! It just works :)**  
-A weird quirk about it is that when I'm trying to exit the shell it's stuck for some reason. I don't know why, as I've not spent much time debugging it, because it's possible to terminate the _cmd.exe_ and its _conhost.exe_ externally with no problem.  
+The [full shellcode](https://github.com/Kristal-g/kristal-g.github.io/blob/master/assets/code/shellcode_iret_blog.asm) is on my github. Notice that it has hardcoded offsets for my build that must to be changed for it to work on other builds.  
+
+A weird quirk about it is that when I'm trying to exit the shell it's stuck for some reason. I don't know why, as I've not spent much time debugging it, because it is possible to just terminate the _cmd.exe_ and its _conhost.exe_ externally with no problem instead of exiting.  
 <br/>  
 
 ## Summary
@@ -161,7 +163,7 @@ To use it in a reliable exploit, it should handle way more edge cases. Most impo
 Maybe it will amount to a few lines of code that check for the KVAShadow flag and restore usermode's cr3 if needed, but I don't know.   
 If anyone wants to make this shellcode KPTI-friendly it will be awesome.  
 
-Finally, on a bit more personal note - technically figuring it all out and testing took about 6-8 hours. Writing it down for this post took maybe 10 fucking hours. Why??!?   Pretty frustrating.
+Finally, on a bit more personal note - technically figuring it all out and testing took about 6-8 hours. Writing it down for this post also took about 6 fucking hours. Why??!? Pretty frustrating.
 <br/>  
 
 ## Reference list
