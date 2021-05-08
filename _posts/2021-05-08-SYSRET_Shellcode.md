@@ -132,8 +132,8 @@ Now let's add what we know:
 	mov r11, [rdx + 0x178]		; ETHREAD.TrapFrame.EFlags
 	mov rsp, [rdx + 0x180]		; ETHREAD.TrapFrame.Rsp
 	mov rbp, [rdx + 0x158]		; ETHREAD.TrapFrame.Rbp
-	xor edx, edx			; Like KiSystemCall64 does
-	xor eax, eax 	        	; return STATUS_SUCCESS to NtDeviceIoControlFile 
+	xor edx, edx			; Like KiSystemCall64 does (not a must)
+	xor eax, eax 	        	
 	swapgs
 	o64 sysret		; nasm syntax shit
 ```
