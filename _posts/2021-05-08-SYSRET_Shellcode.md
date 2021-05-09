@@ -19,22 +19,22 @@ This sounds interesting! plus he had one example of someone using it, but in a [
 <br/>
 
 ## Technical background
-A disclamer here: this topic is pretty big and I'm not going to cover every little detail all in here. So I highly encourage taking a look in the bottom of this post at the list of great reference articles that I've used.  
+A disclaimer here: this topic is pretty big and I'm not going to cover every little detail all in here. So I highly encourage taking a look at the bottom of this post at the list of great reference articles that I've used.  
 
 My testing was on a Windows 10 version 2004 build 19041.685 as the Guest machine running on Hyper-V.  
 
-The most common way for user mode to interact with kernel code is by **issuing a system call**.   
-Moreover, in high probability that's where our abusable kernel vulnerability will be at (in case of LPE) so we will assume our shellcode runs in a context of a system call.  
+The most common way for user-mode to interact with kernel code is by **issuing a system call**.   
+Moreover, in a high probability that's where our abusable kernel vulnerability will be at (in the case of LPE) so we will assume our shellcode runs in a context of a system call.  
 There are two ways to issue a system call - the `syscall` and the `int 2e` opcodes.  
 The choice is based on the _SystemCall_ field in the _SharedUserData_ struct.  
 ![](/assets/images/sysret_shellcode/ntdll_systemcall_small.jpg)
 
 I'll say that it's safe to assume the `syscall` instruction will be used unless one of the following conditions apply:
 * The system is 32bit (`syscall` is long mode instruction)
-* Credential Guard feature is enabled - because it's virtualization based and the hypervisor can handle the `int` instruction better  
+* Credential Guard feature is enabled - because it's virtualization-based and the hypervisor can handle the `int` instruction better  
 
 The main reason there was a move to `syscall` is that it has a much lower overhead than the `int 2e`.  
-It might seems like irrelevant dump of information but we must know about these details in order to implement ourself the switching back to usermode from kernelmode.  
+It might seem like an irrelevant dump of information but we must know about these details to implement the switching back to usermode from kernelmode ourselves.  
 
 Let's assume we're on a host that's using `syscall`. So how does that work?
   
@@ -42,7 +42,7 @@ Let's assume we're on a host that's using `syscall`. So how does that work?
 
 ## Syscall internals
 There are two major execution branches here as well: [with KPTI](https://msrc-blog.microsoft.com/2018/03/23/kva-shadow-mitigating-meltdown-on-windows/) enabled and without.  
-Of course it's a simplification but practically that's what we need to address in our implementation.
+Of course it's a simplification, but practically that's what we need to address in our implementation.
 
 The `syscall` instuction does many things, including:
 * Save rip into rcx
@@ -77,20 +77,20 @@ We'll focus on the non-KPTI implementation here - the `KiSystemCall64` function.
 First, the function executes `swapgs` - this lets the kernel use the `gs` register to access important kernel structures.  
 When an interrupt occurs there's a need to save a context about the CPU's state before switching to kernelmode.
 This context is saved in a struct called [KTRAP_FRAME](https://www.vergiliusproject.com/kernels/x64/Windows%2010%20%7C%202016/2009%2020H2%20(October%202020%20Update)/_KTRAP_FRAME).  
-Usually on hardware interrupts it's done partly by the hardware and partly by the exception handling functions in the kernel. But with syscalls, the syscall handler function is responsible of building and saving the `KTRAP_FRAME`.  
+Usually on hardware interrupts it's done partly by the hardware and partly by the exception handling functions in the kernel. But with syscalls, the syscall handler function is responsible for building and saving the `KTRAP_FRAME`.  
 After `KiSystemCall64` saves the trap frame (with the help of the `gs` register) it goes on to call the relevant function for the given syscall number.  
 
 Now that we mostly understand what happens when a `syscall` is dispatched from usermode all the way up to kernelmode, we're interested in how the kernel reverts back to usermode.  
 Therefore, a point of interest is the function's exit points, like this one:  
 ![](/assets/images/sysret_shellcode/KiSystemCall64_end_small.jpg)
 
-Specifically it's using `sysret` and that's what we're expecting after we've performed `syscall`.  
+Specifically, it's using `sysret` and that's what we're expecting after we've performed `syscall`.  
 We see it's setting the registers _rax, r8, r9, rcx, r11, rbp, rsp_ from some struct and zeroing _edx_ and _xmm_ registers.  
 The _rdx, r8, r9, and xmm1-xmm5_ registers are [considered volatile](https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160) so their value isn't really meaningful and we can ignore them.  
 The struct that these registers are copied from is that trap frame we talked about.  
 
-Then, the function executes `swapgs` again so the kernel structs won't be visible to usermode and runs `sysret`.  
-_sysret_ does exactly the reverse of _syscall_, which I've detailed here already so I won't dive deeper on that.  
+Then, the function executes `swapgs` again so the usermode code has access to its own TEB, and finally runs `sysret`.  
+_sysret_ does exactly the reverse of _syscall_, which I've detailed here already so I won't dive deeper into that.  
 <br/>  
 
 ## Implementation
@@ -152,18 +152,19 @@ mov [rax + 0x1e4], cx
 ```
 
 **And that's it! It just works :)**  
-The [full shellcode](https://github.com/Kristal-g/kristal-g.github.io/blob/master/assets/code/shellcode_iret_blog.asm) is on my github. Notice that it has hardcoded offsets for my build that must to be changed for it to work on other builds.  
+After running the exploit with this shellcode it successfully spawns a SYSTEM cmd shell and it works without a problem.  
+The [full shellcode](https://github.com/Kristal-g/kristal-g.github.io/blob/master/assets/code/shellcode_iret_blog.asm) is on my Github. Notice that it has hardcoded offsets for my build that must be changed for it to work on other builds.  
 
 A weird quirk about it is that when I'm trying to exit the shell it's stuck for some reason. I don't know why, as I've not spent much time debugging it, because it is possible to just terminate the _cmd.exe_ and its _conhost.exe_ externally with no problem instead of exiting.  
 <br/>  
 
 ## Summary
-Currently, this is just a poc/neat trick.  
-To use it in a reliable exploit, it should handle way more edge cases. Most importantely - KVAShadow.  
+Currently, this is just a POC/neat trick.  
+To use it in a reliable exploit, it should handle way more edge cases. Most importantly - KVAShadow.  
 Maybe it will amount to a few lines of code that check for the KVAShadow flag and restore usermode's cr3 if needed, but I don't know.   
 If anyone wants to make this shellcode KPTI-friendly it will be awesome.  
 
-Finally, on a bit more personal note - technically figuring it all out and testing took about 6-8 hours. Writing it down for this post also took about 6 fucking hours. Why??!? Pretty frustrating.
+Finally, on a bit more personal note - technically figuring it all out and testing took about 6-8 hours. I thought that writing this post will be quick but it also took about 6 fucking hours. Why??!?  
 <br/>  
 
 ## Reference list
@@ -172,7 +173,7 @@ https://thecyberil.com/system-call-anatomy/
 https://blog.amossys.fr/windows10_TH2_int2E_mystery.html
 https://wiki.osdev.org/Sysenter
 https://msrc-blog.microsoft.com/2018/03/23/kva-shadow-mitigating-meltdown-on-windows/
-
+<br/>  
 
 ## Contact me
 Feel free to reach out at my [Twitter](https://twitter.com/gal_kristal) or [email](mailto:gkristal.w@gmail.com)!
