@@ -11,11 +11,11 @@ tags:
 ---
 
 ## Introduction
-This is supposed to be a somewhat brief post about a neat trick my friend ([@sagitz_](https://twitter.com/sagitz_)) suggested that I try.  
-This manly friend had raised a question: instead of messing with [restoring the stack and whatnot]({% post_url 2021-03-11-HEVD_Type_Confusion_Windows_10_RS5_x64 %}), wouldn't it be much easier to just return from kernelmode to usermode in a kernel shellcode?  
+Hey all! this is supposed to be a somewhat brief post about a neat kernel shellcode technique.  
+An awesome friend of mine ([@sagitz_](https://twitter.com/sagitz_)) had raised a clever question: instead of messing with a kernel-shellcode cleanup ([like restoring the stack]({% post_url 2021-03-11-HEVD_Type_Confusion_Windows_10_RS5_x64 %})), wouldn't it be much easier to just switch back to user-mode?  
 
-This sounds interesting! plus he had one example of someone using it, but in a [linux shellcode](https://github.com/vnik5287/sock_diag_x64/blob/486ce10dbef95776b22f228a74afe39ec9a0e16c/sockdiag_smep.c#L59).
-  
+This sounds interesting! plus he had one example of someone using it in an exploit, but in a [linux context](https://github.com/vnik5287/sock_diag_x64/blob/486ce10dbef95776b22f228a74afe39ec9a0e16c/sockdiag_smep.c#L59).  
+Let's look at it from a Windows perspective.  
 <br/>
 
 ## Technical background
