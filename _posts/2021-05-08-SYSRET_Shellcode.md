@@ -168,11 +168,11 @@ Finally, on a bit more personal note - technically figuring it all out and testi
 <br/>  
 
 ## Reference list
-https://codemachine.com/articles/system_call_instructions.html
-https://thecyberil.com/system-call-anatomy/
-https://blog.amossys.fr/windows10_TH2_int2E_mystery.html
-https://wiki.osdev.org/Sysenter
-https://msrc-blog.microsoft.com/2018/03/23/kva-shadow-mitigating-meltdown-on-windows/
+[https://codemachine.com/articles/system_call_instructions.html]  
+[https://thecyberil.com/system-call-anatomy/]  
+[https://blog.amossys.fr/windows10_TH2_int2E_mystery.html]  
+[https://wiki.osdev.org/Sysenter]  
+[https://msrc-blog.microsoft.com/2018/03/23/kva-shadow-mitigating-meltdown-on-windows/]  
 <br/>  
 
 ## Contact me
